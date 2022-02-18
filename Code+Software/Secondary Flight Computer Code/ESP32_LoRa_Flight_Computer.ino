@@ -150,16 +150,18 @@ void setup() {
     
 }
 
-//Task1code: blinks an LED every 1000 ms
+//Task1code: Gets Sensor data and appends to SD
 void Task1code( void * pvParameters ){
   Serial.print("Task1 running on core ");
   Serial.println(xPortGetCoreID());
 
   for(;;)
   {
-    Serial.print("Task1");
+
 
     get_Readings();
+
+    appendFile(SD, "/data.txt", "yowassuop"); // Cant include a logSD function as GPS outputs lat=0 lon=0
     //log_SD();
     
    // vTaskDelay(3333 / portTICK_PERIOD_MS);
@@ -175,7 +177,8 @@ void Task2code( void * pvParameters )
   for(;;)
   {
    // Serial.print("Task2");
-   // vTaskDelay(1000 / portTICK_PERIOD_MS);
+//   Serial.print("Task2");
+//    vTaskDelay(1000 / portTICK_PERIOD_MS);
    while (serialGPS.available() > 0) 
       {
        // Serial.print("h");
@@ -199,7 +202,7 @@ void Task2code( void * pvParameters )
 void loop() 
 
 {
-  
+ 
   
 }
 
