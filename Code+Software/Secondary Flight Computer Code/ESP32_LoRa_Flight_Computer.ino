@@ -11,6 +11,20 @@
 TaskHandle_t Task1;
 TaskHandle_t Task2;
 
+
+#include <LoRa.h>
+#define BAND 866E6
+
+int counter =0;
+
+//define the pins used by the LoRa transceiver module
+#define SCK 5
+#define MISO 19
+#define MOSI 27
+#define SS 18
+#define RST 14
+#define DIO0 26
+
 /// BLUETOOTH////////
 #include "BluetoothSerial.h"
 
@@ -92,6 +106,16 @@ float alt_offset;
 void setup() {
    Serial.begin(9600);
 
+   //SPI LoRa pins
+  SPI.begin(SCK, MISO, MOSI, SS);
+  //setup LoRa transceiver module
+  LoRa.setPins(SS, RST, DIO0);
+  
+  if (!LoRa.begin(BAND))
+  {
+    Serial.println("Starting LoRa failed!");
+  }
+
    setupSD();
 
    unsigned status;
@@ -144,7 +168,7 @@ void setup() {
                     1);          /* pin task to core 1 */
     delay(500); 
 
-  while(BT_receive(1) != "start"){}
+  //while(BT_receive(1) != "start"){}
   get_Readings();
 
     
@@ -159,12 +183,50 @@ void Task1code( void * pvParameters ){
   {
 
 
-    get_Readings();
+    //get_Readings();
 
-    appendFile(SD, "/data.txt", "yowassuop"); // Cant include a logSD function as GPS outputs lat=0 lon=0
+    for (int i = 0; i <10;i++)  // Take 10 readings then average
+  {
+  
+      altitude_sum = altitude_sum + get_alt(); // BAROMETER DATA
+      accel_sum = accel_sum + get_accel();                  // ACCELEROMETER DATA
+
+     vTaskDelay(100 / portTICK_PERIOD_MS);
+
+  }
+
+  avg_altitude = altitude_sum/10;
+  avg_accel = accel_sum/10;
+
+  altitude_sum =0;
+  accel_sum=0;
+
+  Serial.print("Alt=");
+  Serial.println(avg_altitude);
+
+  Serial.print("Lat=");
+  Serial.println(lat);
+
+  Serial.print("Lon=");
+  Serial.println(lon);
+
+  Serial.println();
+
+    appendFile(SD, "/data.txt", "yeetus"); // Cant include a logSD function as GPS outputs lat=0 lon=0
     //log_SD();
-    
-   // vTaskDelay(3333 / portTICK_PERIOD_MS);
+
+     //  Send LoRa packet to receiver
+
+     Serial.print("Sending Packet:");
+     Serial.print(counter);
+    LoRa.beginPacket();
+    LoRa.print("hello ");
+    LoRa.print(counter);
+    LoRa.endPacket();
+
+    counter++;
+//    
+  //  vTaskDelay(3333 / portTICK_PERIOD_MS);
   } 
 }
 
@@ -176,10 +238,16 @@ void Task2code( void * pvParameters )
 
   for(;;)
   {
-   // Serial.print("Task2");
-//   Serial.print("Task2");
-//    vTaskDelay(1000 / portTICK_PERIOD_MS);
-   while (serialGPS.available() > 0) 
+
+
+
+      vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
+void loop() 
+{
+
+ while (serialGPS.available() > 0) 
       {
        // Serial.print("h");
   
@@ -194,15 +262,38 @@ void Task2code( void * pvParameters )
         Serial.print(";"); 
         Serial.print("Longitude:"); 
         Serial.println(lon,6);  
-        } 
+        }
+        
+        
 
       }
-  }
-}
-void loop() 
 
-{
- 
+     // delay(1000);
+
+//          LoRa.beginPacket();
+//    LoRa.print("hello ");
+//    LoRa.print(counter);
+//    LoRa.endPacket();
+
+      //delay(1000);
+
+
+
+
+
+
+
+  
+//{   Serial.print("Sending Packet");
+//    Serial.println(counter);
+//    LoRa.beginPacket();
+//    LoRa.print("hello ");
+//    LoRa.print(counter);
+//    LoRa.endPacket();
+//
+//    counter++;
+//
+//    delay(3000);
   
 }
 
