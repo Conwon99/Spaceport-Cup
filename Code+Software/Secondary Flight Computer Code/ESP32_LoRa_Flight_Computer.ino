@@ -15,7 +15,8 @@ TaskHandle_t Task2;
 #include <LoRa.h>
 #define BAND 866E6
 
-int counter =0;
+float seconds =0;
+char secs_c[10];
 
 //define the pins used by the LoRa transceiver module
 #define SCK 5
@@ -25,7 +26,7 @@ int counter =0;
 #define RST 14
 #define DIO0 26
 
-/// BLUETOOTH////////
+/// BLUETOOTH//////////////////////////////////////////////////////////////////
 #include "BluetoothSerial.h"
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -41,16 +42,17 @@ int BT_num_messages = 1;
 int charnum = 0;
 char incomingChar;
 
-
+//GPS//////////////////////////////////////////////////////////////////////
 #include <SoftwareSerial.h>
 #include <TinyGPS.h> 
 
-
 TinyGPS gps; // create gps object 
+SoftwareSerial serialGPS(25,12);
+
 float lat,lon; // create variable for latitude and longitude object  
 
-//HardwareSerial GPS_Serial(1);
-SoftwareSerial serialGPS(25,12);
+char lat_c[20];
+char lon_c[20];
 
 
 
@@ -66,6 +68,9 @@ SoftwareSerial serialGPS(25,12);
 #define SD_MISO 2
 
 bool SDfail=0;
+
+char csv_buffer[70];
+
 SPIClass sdSPI(HSPI);
 
 // Function prototypes
@@ -99,7 +104,7 @@ float avg_altitude=0;
 float avg_accel;
 float altitude_sum, accel_sum;
 float alt_offset;
-
+char alt_c[10];
 
 
 
@@ -212,19 +217,46 @@ void Task1code( void * pvParameters ){
 
   Serial.println();
 
-    appendFile(SD, "/data.txt", "yeetus"); // Cant include a logSD function as GPS outputs lat=0 lon=0
+
+    // 'Time, Height, Lat, Lon, state'
+    sprintf(secs_c, "%g", seconds);
+    sprintf(lat_c, "%g", lat);
+    sprintf(lon_c,"%g", lon);
+    sprintf(alt_c,"%g", avg_altitude);
+    
+    
+   // strcpy(csv_buffer, lat);
+    strcpy(csv_buffer, "");
+    strcat(csv_buffer, secs_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer,alt_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer, lat_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer, lon_c);
+//    sprintf(csv_buffer, "%g", lat);
+//    strcat(csv_buffer, lon);
+
+    Serial.print("csv_buffer:");
+    Serial.println(csv_buffer);
+    
+
+    
+    appendFile(SD, "/data.txt", csv_buffer); // Cant include a logSD function as GPS outputs lat=0 lon=0
+    appendFile(SD, "/data.txt", "\n"); // Cant include a logSD function as GPS outputs lat=0 lon=0
     //log_SD();
 
      //  Send LoRa packet to receiver
 
      Serial.print("Sending Packet:");
-     Serial.print(counter);
+     Serial.print(seconds);
     LoRa.beginPacket();
-    LoRa.print("hello ");
-    LoRa.print(counter);
+    LoRa.print("PacketNum:");
+    LoRa.println(seconds);
+    LoRa.println(csv_buffer);
     LoRa.endPacket();
 
-    counter++;
+    seconds++;
 //    
   //  vTaskDelay(3333 / portTICK_PERIOD_MS);
   } 
