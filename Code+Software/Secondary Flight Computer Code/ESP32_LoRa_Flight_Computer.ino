@@ -8,8 +8,8 @@
  * 
  */
 
-TaskHandle_t Task1;
-TaskHandle_t Task2;
+TaskHandle_t LoRa_Tx;
+TaskHandle_t read_sensors;
 
 
 #include <LoRa.h>
@@ -69,18 +69,32 @@ char lon_c[20];
 
 bool SDfail=0;
 
-char csv_buffer[70];
+char csv_buffer[100];
 
 SPIClass sdSPI(HSPI);
 
-// Function prototypes
 
 
+// BAROMETER 
+#include <Wire.h>
+#include <SPI.h>
+#include <Adafruit_BMP280.h>
 
+Adafruit_BMP280 bmp; // I2C
+
+
+//ACCELEROMETER////////////////////////////////
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+
+Adafruit_MPU6050 mpu;
+
+// Function prototypes//////////////////////////////
 
 float get_alt();
 float get_accel();
 void get_Readings();
+void set_Offset();
 
 
 void setupSD(void);
@@ -92,26 +106,35 @@ String BT_receive(int num_msgs);
 void BT_send_status();
 
 
-// BAROMETER & ACCELEROMETER////////
-#include <Wire.h>
-#include <SPI.h>
-#include <Adafruit_BMP280.h>
 
-Adafruit_BMP280 bmp; // I2C
 
-// Logging Data
+// GLOBAL VARIABLES ///////////////////////////////
 float avg_altitude=0;
 float avg_accel;
-float altitude_sum, accel_sum;
+char accel_c[10];
+float altitude_sum;
 float alt_offset;
 char alt_c[10];
 
+float accel_sum,accel_offset;
+int readings = 0;
 
 
-void setup() {
+void setup() 
+{
+
+  //Start USB comms
    Serial.begin(9600);
+   delay(100);
 
-   //SPI LoRa pins
+   //Start GPS comms
+   serialGPS.begin(9600);
+
+   // Start Bluetooth comms   
+   SerialBT.begin("ESP32"); //Bluetooth device name
+   Serial.println("The device started, now you can pair it with bluetooth!");
+
+   //Start LoRa comms
   SPI.begin(SCK, MISO, MOSI, SS);
   //setup LoRa transceiver module
   LoRa.setPins(SS, RST, DIO0);
@@ -121,11 +144,12 @@ void setup() {
     Serial.println("Starting LoRa failed!");
   }
 
-   setupSD();
 
-   unsigned status;
+// Start Barometer comms
+  unsigned status;
   status = bmp.begin();
-  if (!status) {
+  if (!status) 
+  {
     Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
                       "try a different address!"));
     Serial.print("SensorID was: 0x"); Serial.println(bmp.sensorID(),16);
@@ -145,140 +169,166 @@ void setup() {
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
 
    
-   
-   serialGPS.begin(9600);
 
-   SerialBT.begin("ESP32"); //Bluetooth device name
-   Serial.println("The device started, now you can pair it with bluetooth!");
+    // Start Accelerometer comms
+    if (!mpu.begin())
+    {
+    Serial.println("Failed to find MPU6050 chip");
+    }
+
+     // set accelerometer range to +-16G
+  mpu.setAccelerometerRange(MPU6050_RANGE_16_G);
+
+  // set filter bandwidth to 21 Hz
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  // Start SD card comms
+  setupSD();
+
+  set_Offset();
+
+  Serial.println("Effset has been set");
+  get_Readings();
+
+
+   
 
   //create a task that will be executed in the Task1code() function, with priority 1 and executed on core 0
   xTaskCreatePinnedToCore(
-                    Task1code,   /* Task function. */
-                    "Task1",     /* name of task. */
+                    LoRa_Tx_code,   /* Task function. */
+                    "LoRa_Tx",     /* name of task. */
                     10000,       /* Stack size of task */
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
-                    &Task1,      /* Task handle to keep track of created task */
+                    &LoRa_Tx,      /* Task handle to keep track of created task */
                     0);          /* pin task to core 0 */                  
   delay(500); 
 
-  //create a task that will be executed in the Task2code() function, with priority 1 and executed on core 1
-  xTaskCreatePinnedToCore(
-                    Task2code,   /* Task function. */
-                    "Task2",     /* name of task. */
+
+    xTaskCreatePinnedToCore(
+                    read_sensors_code,   /* Task function. */
+                    "read_sensor",     /* name of task. */
                     10000,       /* Stack size of task */
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
-                    &Task2,      /* Task handle to keep track of created task */
-                    1);          /* pin task to core 1 */
-    delay(500); 
+                    &read_sensors,      /* Task handle to keep track of created task */
+                    0);          /* pin task to core 0 */                  
+  delay(500); 
+
+ 
 
   //while(BT_receive(1) != "start"){}
-  get_Readings();
 
+ 
     
 }
 
-//Task1code: Gets Sensor data and appends to SD
-void Task1code( void * pvParameters ){
+
+
+//Reads accelerometer data at 10Hz
+void read_sensors_code( void * pvParameters )
+{
+  Serial.print("Task accel_read running on core ");
+  Serial.println(xPortGetCoreID());
+
+  for(;;)
+  {
+
+    
+    for (int i = 0; i <10;i++)  // Takes 10 readings at a rate of every 0.01s (a t100Hz)
+  {
+  
+      altitude_sum = altitude_sum + get_alt();              // BAROMETER DATA
+      accel_sum = accel_sum + get_accel();                  // ACCELEROMETER DATA
+      vTaskDelay(10 / portTICK_PERIOD_MS);
+
+  }
+
+  //average the 10 readings over the 0.1s
+  avg_altitude = altitude_sum/10;
+  avg_accel = accel_sum/10;
+  
+  //reset the sum values for next reading
+  altitude_sum =0;
+  accel_sum = 0;
+  
+//
+//  Serial.print("Alt=");
+//  Serial.println(avg_altitude);
+//
+//  Serial.print("Lat=");
+//  Serial.println(lat);
+//
+//  Serial.print("Lon=");
+//  Serial.println(lon);
+
+//  Serial.println();
+
+  
+
+    // Convert sensor reading into strings to send to SD/Lora
+    sprintf(secs_c, "%g", seconds);
+    sprintf(lat_c, "%g", lat);
+    sprintf(lon_c,"%g", lon);
+    sprintf(alt_c,"%g", avg_altitude);
+    sprintf(accel_c,"%g", avg_accel);
+    
+    //Append strings to buffer
+   // 'Time, Lat, Lon, Altitude, Accel, state'
+    strcpy(csv_buffer, "");
+    strcat(csv_buffer, secs_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer, lat_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer, lon_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer,alt_c);
+    strcat(csv_buffer, ",");
+    strcat(csv_buffer,accel_c);
+  
+    //Ensure buffer correct
+    Serial.print("csv_buffer:");
+    Serial.println(csv_buffer);
+
+    //Send buffer to SD
+    appendFile(SD, "/data.txt", csv_buffer); // Cant include a logSD function as GPS outputs lat=0 lon=0
+    appendFile(SD, "/data.txt", "\n"); // Cant include a logSD function as GPS outputs lat=0 lon=0
+    seconds=seconds+0.1;
+
+  }
+
+}
+
+
+
+//Sends Lora Data every Second
+void LoRa_Tx_code( void * pvParameters )
+{
   Serial.print("Task1 running on core ");
   Serial.println(xPortGetCoreID());
 
   for(;;)
   {
 
-
-    //get_Readings();
-
-    for (int i = 0; i <10;i++)  // Take 10 readings then average
-  {
-  
-      altitude_sum = altitude_sum + get_alt(); // BAROMETER DATA
-      accel_sum = accel_sum + get_accel();                  // ACCELEROMETER DATA
-
-     vTaskDelay(100 / portTICK_PERIOD_MS);
-
-  }
-
-  avg_altitude = altitude_sum/10;
-  avg_accel = accel_sum/10;
-
-  altitude_sum =0;
-  accel_sum=0;
-
-  Serial.print("Alt=");
-  Serial.println(avg_altitude);
-
-  Serial.print("Lat=");
-  Serial.println(lat);
-
-  Serial.print("Lon=");
-  Serial.println(lon);
-
-  Serial.println();
-
-
-    // 'Time, Height, Lat, Lon, state'
-    sprintf(secs_c, "%g", seconds);
-    sprintf(lat_c, "%g", lat);
-    sprintf(lon_c,"%g", lon);
-    sprintf(alt_c,"%g", avg_altitude);
-    
-    
-   // strcpy(csv_buffer, lat);
-    strcpy(csv_buffer, "");
-    strcat(csv_buffer, secs_c);
-    strcat(csv_buffer, ",");
-    strcat(csv_buffer,alt_c);
-    strcat(csv_buffer, ",");
-    strcat(csv_buffer, lat_c);
-    strcat(csv_buffer, ",");
-    strcat(csv_buffer, lon_c);
-//    sprintf(csv_buffer, "%g", lat);
-//    strcat(csv_buffer, lon);
-
-    Serial.print("csv_buffer:");
-    Serial.println(csv_buffer);
-    
-
-    
-    appendFile(SD, "/data.txt", csv_buffer); // Cant include a logSD function as GPS outputs lat=0 lon=0
-    appendFile(SD, "/data.txt", "\n"); // Cant include a logSD function as GPS outputs lat=0 lon=0
-    //log_SD();
-
-     //  Send LoRa packet to receiver
-
      Serial.print("Sending Packet:");
-     Serial.print(seconds);
-    LoRa.beginPacket();
-    LoRa.print("PacketNum:");
-    LoRa.println(seconds);
-    LoRa.println(csv_buffer);
-    LoRa.endPacket();
+     Serial.println(seconds);
+     LoRa.beginPacket();
+     LoRa.print("PacketNum:");
+     LoRa.println(seconds);
+     LoRa.println(csv_buffer);
+     LoRa.endPacket();
 
-    seconds++;
-//    
-  //  vTaskDelay(3333 / portTICK_PERIOD_MS);
+     vTaskDelay(1000 / portTICK_PERIOD_MS); // Send data every second
+
+
   } 
 }
 
-//Task2code: blinks an LED every 700 ms
-void Task2code( void * pvParameters )
-{
-  Serial.print("Task2 running on core ");
-  Serial.println(xPortGetCoreID());
 
-  for(;;)
-  {
-
-
-
-      vTaskDelay(1000 / portTICK_PERIOD_MS);
-  }
-}
 void loop() 
 {
 
+ // GPS works best if kept in main loop
  while (serialGPS.available() > 0) 
       {
        // Serial.print("h");
@@ -296,59 +346,32 @@ void loop()
         Serial.println(lon,6);  
         }
         
-        
-
       }
 
-     // delay(1000);
-
-//          LoRa.beginPacket();
-//    LoRa.print("hello ");
-//    LoRa.print(counter);
-//    LoRa.endPacket();
-
-      //delay(1000);
-
-
-
-
-
-
-
-  
-//{   Serial.print("Sending Packet");
-//    Serial.println(counter);
-//    LoRa.beginPacket();
-//    LoRa.print("hello ");
-//    LoRa.print(counter);
-//    LoRa.endPacket();
-//
-//    counter++;
-//
-//    delay(3000);
-  
 }
 
 
 
 
-
+///////////FUNCTIONS////////////////////////////////////////////////////
 
 
 
 float get_alt()
 {
-   //Serial.print(F("Approx altitude = "));
-   //Serial.print(bmp.readAltitude(1013.25)-alt_offset); /* Adjusted to local forecast! */
-  // Serial.println(" m");
-
    return bmp.readAltitude(1013.25)-alt_offset;
-   
 }
+
+
 float get_accel()
 {
-  
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  return a.acceleration.x - accel_offset;
 }
+
+
 
 String BT_receive(int num_msgs) {
 
@@ -437,6 +460,33 @@ void get_Readings()
   Serial.println();
 
 }
+
+
+
+void set_Offset()
+{
+
+// Calculate Offset 
+for (int i = 0; i <100;i++)  // Take 10 readings then average
+  {
+  
+      //accel_x_sum = accel_x_sum + accel_x; // BAROMETER DATA
+      accel_sum = accel_sum + get_accel();                  // ACCELEROMETER DATA
+
+     delay(10);
+
+  }
+    accel_offset = accel_sum/100;
+    accel_sum=0;
+
+    Serial.print("accel_offset = ");
+    Serial.println(accel_offset);
+  
+}
+
+
+
+
 
 void log_SD()
 {
